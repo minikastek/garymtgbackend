@@ -1,30 +1,34 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const {
+  ensureBoards,
+  evaluateLegality,
+  isBasicLand,
+  maxCopiesFor,
+} = require('../src/utils/deck-legality');
 
 const router = express.Router();
 const DB_PATH = path.join(__dirname, '..', 'decks.json');
-const MAX_COPIES = 4; // Standard (salvo lands básicos: se permite más)
 
 function loadDecks() {
   if (!fs.existsSync(DB_PATH)) return [];
-  return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')).map((d) => ensureBoards(d));
 }
 
 function saveDecks(decks) {
   fs.writeFileSync(DB_PATH, JSON.stringify(decks, null, 2));
 }
 
-function isBasicLand(type) {
-  return /Basic Land/i.test(type || '');
-}
-
 function publicDeck(d) {
+  ensureBoards(d);
   return {
     id: d.id,
     name: d.name,
     userId: d.userId,
-    cards: d.cards || [],
+    main: d.main,
+    sideboard: d.sideboard,
+    legality: evaluateLegality(d),
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
@@ -40,7 +44,40 @@ function ownDeck(req, res) {
     res.status(403).json({ error: 'No es tu deck' });
     return null;
   }
-  return deck;
+  return ensureBoards(deck);
+}
+
+function parseBoard(value) {
+  return value === 'sideboard' ? 'sideboard' : 'main';
+}
+
+/** Cantidad total de una carta (por nombre) en main + sideboard */
+function totalCopies(deck, cardName) {
+  const key = String(cardName || '').toLowerCase().split(' // ')[0];
+  let total = 0;
+  for (const board of ['main', 'sideboard']) {
+    for (const c of deck[board]) {
+      if (String(c.name || '').toLowerCase().split(' // ')[0] === key) {
+        total += Number(c.quantity) || 0;
+      }
+    }
+  }
+  return total;
+}
+
+function cardPayload(card, qty) {
+  return {
+    id: card.id,
+    name: card.name,
+    set: card.set,
+    collectorNumber: card.collectorNumber,
+    rarity: card.rarity,
+    type: card.type,
+    image: card.image,
+    imageLarge: card.imageLarge,
+    prices: card.prices,
+    quantity: qty,
+  };
 }
 
 router.get('/', (req, res) => {
@@ -60,7 +97,8 @@ router.post('/', (req, res) => {
     id: Date.now().toString(),
     userId: req.user.id,
     name,
-    cards: [],
+    main: [],
+    sideboard: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -75,6 +113,38 @@ router.get('/:id', (req, res) => {
   res.json({ deck: publicDeck(deck) });
 });
 
+/** Editar / guardar decklist asociada al usuario. body: { name?, main?, sideboard? } */
+router.patch('/:id', (req, res) => {
+  const deck = ownDeck(req, res);
+  if (!deck) return;
+
+  const decks = loadDecks();
+  const current = decks.find((d) => d.id === deck.id);
+  ensureBoards(current);
+
+  if (req.body.name != null) {
+    const name = String(req.body.name).trim();
+    if (!name) return res.status(400).json({ error: 'Nombre requerido' });
+    current.name = name;
+  }
+
+  if (Array.isArray(req.body.main)) current.main = req.body.main;
+  if (Array.isArray(req.body.sideboard)) current.sideboard = req.body.sideboard;
+
+  // bloquear solo exceso de copias (no-básicas); main incompleto sí se puede guardar
+  const legality = evaluateLegality(current);
+  if (legality.copyViolations.length) {
+    return res.status(400).json({
+      error: `Copias inválidas: ${legality.copyViolations.map((v) => `${v.name} (${v.quantity}/${v.max})`).join(', ')}`,
+      legality,
+    });
+  }
+
+  current.updatedAt = new Date().toISOString();
+  saveDecks(decks);
+  res.json({ deck: publicDeck(current) });
+});
+
 router.delete('/:id', (req, res) => {
   const deck = ownDeck(req, res);
   if (!deck) return;
@@ -82,45 +152,37 @@ router.delete('/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Añadir o sumar cartas. body: { card, quantity } */
+/** body: { card, quantity, board: 'main'|'sideboard' } */
 router.post('/:id/cards', (req, res) => {
   const deck = ownDeck(req, res);
   if (!deck) return;
 
   const { card, quantity = 1 } = req.body || {};
+  const board = parseBoard(req.body?.board);
   if (!card?.id || !card?.name) {
     return res.status(400).json({ error: 'Carta inválida' });
   }
 
-  const qty = Math.max(1, Math.min(99, Number(quantity) || 1));
+  const qty = Math.max(1, Math.min(999, Number(quantity) || 1));
+  const max = maxCopiesFor(card);
   const decks = loadDecks();
-  const idx = decks.findIndex((d) => d.id === deck.id);
-  const current = decks[idx];
-  const existing = current.cards.find((c) => c.id === card.id);
-  const max = isBasicLand(card.type) ? 99 : MAX_COPIES;
+  const current = decks.find((d) => d.id === deck.id);
+  ensureBoards(current);
+
+  const existing = current[board].find((c) => c.id === card.id);
+  const otherBoardsQty = totalCopies(current, card.name) - (existing?.quantity || 0);
+  const nextTotal = otherBoardsQty + (existing?.quantity || 0) + qty;
+
+  if (!isBasicLand(card) && nextTotal > max) {
+    return res.status(400).json({
+      error: `Máximo ${max} copias de "${card.name}" entre main y sideboard (ahora ${otherBoardsQty + (existing?.quantity || 0)})`,
+    });
+  }
 
   if (existing) {
-    const next = existing.quantity + qty;
-    if (next > max) {
-      return res.status(400).json({ error: `Máximo ${max} copias de esta carta` });
-    }
-    existing.quantity = next;
+    existing.quantity += qty;
   } else {
-    if (qty > max) {
-      return res.status(400).json({ error: `Máximo ${max} copias de esta carta` });
-    }
-    current.cards.push({
-      id: card.id,
-      name: card.name,
-      set: card.set,
-      collectorNumber: card.collectorNumber,
-      rarity: card.rarity,
-      type: card.type,
-      image: card.image,
-      imageLarge: card.imageLarge,
-      prices: card.prices,
-      quantity: qty,
-    });
+    current[board].push(cardPayload(card, qty));
   }
 
   current.updatedAt = new Date().toISOString();
@@ -132,6 +194,7 @@ router.patch('/:id/cards/:cardId', (req, res) => {
   const deck = ownDeck(req, res);
   if (!deck) return;
 
+  const board = parseBoard(req.body?.board || req.query.board);
   const quantity = Number(req.body.quantity);
   if (!Number.isFinite(quantity) || quantity < 0) {
     return res.status(400).json({ error: 'Cantidad inválida' });
@@ -139,15 +202,20 @@ router.patch('/:id/cards/:cardId', (req, res) => {
 
   const decks = loadDecks();
   const current = decks.find((d) => d.id === deck.id);
-  const entry = current.cards.find((c) => c.id === req.params.cardId);
-  if (!entry) return res.status(404).json({ error: 'Carta no está en el deck' });
+  ensureBoards(current);
+  const entry = current[board].find((c) => c.id === req.params.cardId);
+  if (!entry) return res.status(404).json({ error: 'Carta no está en esa sección' });
 
-  const max = isBasicLand(entry.type) ? 99 : MAX_COPIES;
+  const max = maxCopiesFor(entry);
   if (quantity === 0) {
-    current.cards = current.cards.filter((c) => c.id !== entry.id);
-  } else if (quantity > max) {
-    return res.status(400).json({ error: `Máximo ${max} copias` });
+    current[board] = current[board].filter((c) => c.id !== entry.id);
   } else {
+    const otherQty = totalCopies(current, entry.name) - entry.quantity;
+    if (!isBasicLand(entry) && otherQty + quantity > max) {
+      return res.status(400).json({
+        error: `Máximo ${max} copias entre main y sideboard`,
+      });
+    }
     entry.quantity = quantity;
   }
 
@@ -160,9 +228,11 @@ router.delete('/:id/cards/:cardId', (req, res) => {
   const deck = ownDeck(req, res);
   if (!deck) return;
 
+  const board = parseBoard(req.query.board || req.body?.board);
   const decks = loadDecks();
   const current = decks.find((d) => d.id === deck.id);
-  current.cards = current.cards.filter((c) => c.id !== req.params.cardId);
+  ensureBoards(current);
+  current[board] = current[board].filter((c) => c.id !== req.params.cardId);
   current.updatedAt = new Date().toISOString();
   saveDecks(decks);
   res.json({ deck: publicDeck(current) });

@@ -15,6 +15,12 @@ The HTTP routes still use their existing JSON files. The `db/` directory is the 
 
 The import is idempotent for current records: users and collections are upserted, and each imported collection's card rows are replaced inside one transaction. JSON remains the source of truth until the follow-up `T0B` route cutover.
 
+## Wishlist repository cutover
+
+Wishlist routes now depend on a repository contract. `PERSISTENCE_DRIVER=json` preserves local behavior and remains the default. After migrations, import, and `pg` installation are complete, set `PERSISTENCE_DRIVER=postgres` to use PostgreSQL for wishlist requests.
+
+This is incremental: decks, binders, and trading remain JSON-backed until their repository slices are implemented. Keep the JSON files until all route migrations have verified parity.
+
 ## Configuration
 
 Production startup must provide `JWT_SECRET`. PostgreSQL commands additionally require `DATABASE_URL`. Pool limits and timeouts are configurable through `.env.example`.

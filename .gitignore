@@ -5,4 +5,6 @@ binders.json
 wishlists.json
 *.log
 .env
+.env.*
+!.env.example
 .DS_Store

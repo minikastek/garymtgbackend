@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "test": "node --test ./test/*.test.js"
+    "test": "node --test ./test/*.test.js",
+    "db:migrate": "node db/migrate.js",
+    "db:import-json": "node db/import-json.js"
   },
   "keywords": [],
   "author": "",

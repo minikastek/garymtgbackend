@@ -21,6 +21,8 @@ Wishlist routes now depend on a repository contract. `PERSISTENCE_DRIVER=json` p
 
 This is incremental: decks, binders, and trading remain JSON-backed until their repository slices are implemented. Keep the JSON files until all route migrations have verified parity.
 
+Binder routes use the same repository selection boundary as wishlists. JSON remains the default; PostgreSQL stores binders as `collections.type = 'binder'` and their cards in `collection_cards`. Decks and trading remain JSON-backed.
+
 ## Configuration
 
 Production startup must provide `JWT_SECRET`. PostgreSQL commands additionally require `DATABASE_URL`. Pool limits and timeouts are configurable through `.env.example`.

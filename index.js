@@ -7,7 +7,7 @@ const path = require('path');
 const testRoutes = require('./routes/test');
 const cardsRoutes = require('./routes/cards');
 const decksRoutes = require('./routes/decks');
-const bindersRoutes = require('./routes/binders');
+const bindersRoutes = require('./routes/binder-router');
 const wishlistsRoutes = require('./routes/wishlist-router');
 
 const app = express();

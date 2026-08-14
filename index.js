@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const testRoutes = require('./routes/test');
 const cardsRoutes = require('./routes/cards');
-const decksRoutes = require('./routes/decks');
+const decksRoutes = require('./routes/deck-router');
 const bindersRoutes = require('./routes/binder-router');
 const wishlistsRoutes = require('./routes/wishlist-router');
 

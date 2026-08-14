@@ -23,6 +23,8 @@ This is incremental: decks, binders, and trading remain JSON-backed until their 
 
 Binder routes use the same repository selection boundary as wishlists. JSON remains the default; PostgreSQL stores binders as `collections.type = 'binder'` and their cards in `collection_cards`. Decks and trading remain JSON-backed.
 
+Deck routes are also repository-backed. Mainboard and sideboard values map to `collection_cards.board`, while legality and copy-limit rules remain in the route/domain layer so both persistence adapters enforce identical behavior. Trading remains the final JSON-backed collection consumer.
+
 ## Configuration
 
 Production startup must provide `JWT_SECRET`. PostgreSQL commands additionally require `DATABASE_URL`. Pool limits and timeouts are configurable through `.env.example`.

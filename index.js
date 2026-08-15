@@ -9,6 +9,7 @@ const cardsRoutes = require('./routes/cards');
 const decksRoutes = require('./routes/deck-router');
 const bindersRoutes = require('./routes/binder-router');
 const wishlistsRoutes = require('./routes/wishlist-router');
+const { createTradeRouter } = require('./routes/trade-router');
 const { requestMonitor } = require('./src/utils/request-monitor');
 
 const app = express();
@@ -97,7 +98,7 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
 app.use('/api/decks', authMiddleware, decksRoutes);
 app.use('/api/binders', authMiddleware, bindersRoutes);
 app.use('/api/wishlists', authMiddleware, wishlistsRoutes);
-app.use('/api/trade', authMiddleware, require('./routes/trade'));
+app.use('/api/trade', authMiddleware, createTradeRouter());
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 

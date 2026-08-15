@@ -1,7 +1,9 @@
 const cache = require('../cache/memory-cache');
+const { monitoredFetch } = require('../utils/request-monitor');
 
 const BASE = 'https://api.scryfall.com';
 const MIN_GAP_MS = 100; // Scryfall: ~10 req/s
+const MAX_SEARCH_RESULTS = 20;
 
 let lastRequestAt = 0;
 
@@ -14,7 +16,7 @@ async function fetchWithBackoff(url, attempt = 0) {
   if (wait) await sleep(wait);
   lastRequestAt = Date.now();
 
-  const res = await fetch(url, {
+  const res = await monitoredFetch('Scryfall', url, {
     headers: { Accept: 'application/json', 'User-Agent': 'GaryMTG/1.0' },
   });
 
@@ -73,18 +75,19 @@ async function searchCards(query) {
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  // nombre entre comillas = frase exacta; unique=prints = todas las ediciones
-  const url = `${BASE}/cards/search?unique=prints&q=${encodeURIComponent(`!"${q}"`)}`;
+  const url = `${BASE}/cards/search?unique=prints&q=${encodeURIComponent(q)}`;
   try {
     const data = await fetchWithBackoff(url);
     const cards = (data.data || []).map(cleanCard);
     const qLower = q.toLowerCase();
     cards.sort((a, b) => {
-      const ae = a.name.toLowerCase() === qLower ? 0 : 1;
-      const be = b.name.toLowerCase() === qLower ? 0 : 1;
-      return ae - be;
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aRank = aName === qLower ? 0 : aName.startsWith(qLower) ? 1 : aName.includes(qLower) ? 2 : 3;
+      const bRank = bName === qLower ? 0 : bName.startsWith(qLower) ? 1 : bName.includes(qLower) ? 2 : 3;
+      return aRank - bRank || aName.localeCompare(bName);
     });
-    return cache.set(cacheKey, cards);
+    return cache.set(cacheKey, cards.slice(0, MAX_SEARCH_RESULTS));
   } catch (err) {
     if (err.status === 404) return cache.set(cacheKey, []);
     throw err;

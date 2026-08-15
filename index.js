@@ -8,7 +8,7 @@ const testRoutes = require('./routes/test');
 const cardsRoutes = require('./routes/cards');
 const decksRoutes = require('./routes/decks');
 const bindersRoutes = require('./routes/binders');
-const wishlistsRoutes = require('./routes/wishlists');
+const wishlistsRoutes = require('./routes/wishlist-router');
 
 const app = express();
 const PORT = 3001;

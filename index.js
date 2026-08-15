@@ -6,15 +6,17 @@ const fs = require('fs');
 const path = require('path');
 const testRoutes = require('./routes/test');
 const cardsRoutes = require('./routes/cards');
-const decksRoutes = require('./routes/decks');
+const decksRoutes = require('./routes/deck-router');
 const bindersRoutes = require('./routes/binder-router');
 const wishlistsRoutes = require('./routes/wishlist-router');
+const { requestMonitor } = require('./src/utils/request-monitor');
 
 const app = express();
 const PORT = 3001;
 const JWT_SECRET = 'garymtg-dev-secret'; // ponytail: solo para local; mover a env en prod
 const DB_PATH = path.join(__dirname, 'users.json');
 
+app.use(requestMonitor);
 app.use(cors());
 app.use(express.json());
 app.use('/api/test', testRoutes);

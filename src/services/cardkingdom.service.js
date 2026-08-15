@@ -1,4 +1,5 @@
 const cache = require('../cache/memory-cache');
+const { monitoredFetch } = require('../utils/request-monitor');
 
 const URL = 'https://api.cardkingdom.com/api/v2/pricelist';
 
@@ -47,7 +48,7 @@ async function loadPricelist() {
   const cached = cache.get('cardkingdom:pricelist');
   if (cached) return cached;
 
-  const res = await fetch(URL, {
+  const res = await monitoredFetch('Card Kingdom', URL, {
     headers: { Accept: 'application/json', 'User-Agent': 'GaryMTG/1.0' },
   });
   if (!res.ok) {

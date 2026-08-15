@@ -1,12 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-
-function cardKey(name) {
-  return String(name || '')
-    .toLowerCase()
-    .split(' // ')[0]
-    .trim();
-}
+const { cardKey, compareCollections } = require('../src/services/trade-match');
 
 describe('trade name match', () => {
   it('ignora edición y normaliza nombre', () => {
@@ -21,9 +15,11 @@ describe('trade name match', () => {
       { name: 'Sol Ring', set: 'MH3', quantity: 2 },
       { name: 'Counterspell', set: 'MH2', quantity: 1 },
     ];
-    const wanted = new Set(wishlist.map((c) => cardKey(c.name)));
-    const matches = binder.filter((c) => wanted.has(cardKey(c.name)));
+    const matches = compareCollections(binder, wishlist);
     assert.equal(matches.length, 1);
-    assert.equal(matches[0].set, 'MH3');
+    assert.equal(matches[0].name, 'Sol Ring');
+    assert.equal(matches[0].binderQuantity, 2);
+    assert.equal(matches[0].wishlistQuantity, 1);
+    assert.equal(matches[0].binderPrintings[0].set, 'MH3');
   });
 });

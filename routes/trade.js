@@ -28,6 +28,17 @@ function countCards(list) {
   return (list || []).reduce((s, c) => s + (Number(c.quantity) || 0), 0);
 }
 
+function tradableBinders(binders, userId) {
+  return binders
+    .filter((binder) => binder.userId === userId && binder.tradeEnabled === true)
+    .map((binder) => ({
+      id: binder.id,
+      name: binder.name,
+      description: binder.description || '',
+      cardCount: countCards(binder.cards),
+    }));
+}
+
 /** GET /api/trade/users?q=ali */
 router.get('/users', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
@@ -47,14 +58,7 @@ router.get('/users/:userId/binders', (req, res) => {
   const user = loadJson(USERS_PATH).find((u) => u.id === req.params.userId);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-  const binders = loadJson(BINDERS_PATH)
-    .filter((b) => b.userId === user.id)
-    .map((b) => ({
-      id: b.id,
-      name: b.name,
-      description: b.description || '',
-      cardCount: countCards(b.cards),
-    }));
+  const binders = tradableBinders(loadJson(BINDERS_PATH), user.id);
 
   res.json({ user: publicUser(user), binders });
 });
@@ -73,7 +77,9 @@ router.post('/compare', (req, res) => {
   const targetUser = loadJson(USERS_PATH).find((u) => u.id === targetUserId);
   if (!targetUser) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-  const binder = loadJson(BINDERS_PATH).find((b) => b.id === binderId && b.userId === targetUserId);
+  const binder = loadJson(BINDERS_PATH).find(
+    (b) => b.id === binderId && b.userId === targetUserId && b.tradeEnabled === true,
+  );
   if (!binder) return res.status(404).json({ error: 'Binder no encontrado' });
 
   const wishlist = loadJson(WISHLISTS_PATH).find(
@@ -134,3 +140,4 @@ router.post('/compare', (req, res) => {
 });
 
 module.exports = router;
+module.exports.tradableBinders = tradableBinders;

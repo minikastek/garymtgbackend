@@ -20,6 +20,7 @@ function normalizeBinder(value) {
     userId: String(value.userId),
     name: String(value.name),
     description: String(value.description || ''),
+    tradeEnabled: value.tradeEnabled === true,
     cards,
     cardCount: cards.reduce((total, card) => total + (Number(card.quantity) || 0), 0),
     createdAt: value.createdAt,

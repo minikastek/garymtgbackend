@@ -12,6 +12,9 @@ describe('binder repositories', () => {
     const repository = new JsonBinderRepository({ filepath: path.join(directory, 'binders.json'), idFactory: () => 'b1', now: () => new Date('2026-08-14T12:00:00Z') });
     try {
       repository.create({ userId: 'u1', name: 'Trades', description: '' });
+      assert.equal(repository.findById('b1').tradeEnabled, false);
+      repository.update('b1', { tradeEnabled: true });
+      assert.equal(repository.findById('b1').tradeEnabled, true);
       repository.addCard('b1', { id: 'ring', name: 'Sol Ring' }, 2);
       assert.equal(repository.findById('b1').cardCount, 2);
       repository.update('b1', { description: 'Available locally' });

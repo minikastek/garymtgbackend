@@ -1,29 +1,27 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const fs = require('fs');
-const { tradableBinders } = require('../routes/trade');
+const { createTradeRouter, tradableBinders } = require('../routes/trade');
 
-async function withTradeServer(fixtures, test) {
-  const originalExistsSync = fs.existsSync;
-  const originalReadFileSync = fs.readFileSync;
-  fs.existsSync = (file) => ['users.json', 'binders.json', 'wishlists.json']
-    .some((name) => String(file).endsWith(name)) || originalExistsSync(file);
-  fs.readFileSync = (file, ...args) => {
+async function withTradeServer(fixtures, test, binderRepository = {}) {
+  const jsonLoader = (file) => {
     const name = ['users', 'binders', 'wishlists'].find((item) => String(file).endsWith(`${item}.json`));
-    return name ? JSON.stringify(fixtures[name] || []) : originalReadFileSync(file, ...args);
+    return fixtures[name] || [];
+  };
+  const repository = {
+    listByUser: async (userId) => (fixtures.binders || []).filter((binder) => binder.userId === userId),
+    findById: async (id) => (fixtures.binders || []).find((binder) => binder.id === id) || null,
+    ...binderRepository,
   };
 
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => { req.user = { id: 'u1' }; next(); });
-  app.use('/api/trade', require('../routes/trade'));
+  app.use('/api/trade', createTradeRouter({ binderRepository: repository, jsonLoader }));
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   try { await test(`http://127.0.0.1:${server.address().port}`); }
   finally {
-    fs.existsSync = originalExistsSync;
-    fs.readFileSync = originalReadFileSync;
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 }
@@ -64,6 +62,28 @@ describe('trade name match', () => {
     assert.deepEqual(tradableBinders(binders, 'u2'), [{
       id: 'public', name: 'Trades', description: '', cardCount: 2,
     }]);
+  });
+
+  it('loads tradable binder summaries through the configured repository', async () => {
+    let requestedUserId;
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/users/u2/binders`);
+      assert.equal(response.status, 200);
+      assert.deepEqual((await response.json()).binders, [{
+        id: 'public', name: 'Trades', description: '', cardCount: 2,
+      }]);
+    }, {
+      listByUser: async (userId) => {
+        requestedUserId = userId;
+        return [{
+          id: 'public', userId: 'u2', name: 'Trades', tradeEnabled: true,
+          cards: [{ quantity: 2 }],
+        }];
+      },
+    });
+    assert.equal(requestedUserId, 'u2');
   });
 
   it('rejects direct comparison against a private binder id', async () => {

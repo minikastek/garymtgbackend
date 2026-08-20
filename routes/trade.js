@@ -1,11 +1,12 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { createBinderRepository } = require('../src/repositories/binder');
 
-const router = express.Router();
 const USERS_PATH = path.join(__dirname, '..', 'users.json');
-const BINDERS_PATH = path.join(__dirname, '..', 'binders.json');
 const WISHLISTS_PATH = path.join(__dirname, '..', 'wishlists.json');
+
+function asyncRoute(handler) { return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next); }
 
 function loadJson(file, fallback = []) {
   if (!fs.existsSync(file)) return fallback;
@@ -39,12 +40,17 @@ function tradableBinders(binders, userId) {
     }));
 }
 
+function createTradeRouter(options = {}) {
+  const router = express.Router();
+  const binderRepository = options.binderRepository || createBinderRepository();
+  const jsonLoader = options.jsonLoader || loadJson;
+
 /** GET /api/trade/users?q=ali */
 router.get('/users', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (q.length < 1) return res.json({ users: [] });
 
-  const users = loadJson(USERS_PATH)
+  const users = jsonLoader(USERS_PATH)
     .filter((u) => u.id !== req.user.id)
     .filter((u) => u.username.toLowerCase().includes(q))
     .slice(0, 20)
@@ -54,35 +60,35 @@ router.get('/users', (req, res) => {
 });
 
 /** GET /api/trade/users/:userId/binders */
-router.get('/users/:userId/binders', (req, res) => {
-  const user = loadJson(USERS_PATH).find((u) => u.id === req.params.userId);
+router.get('/users/:userId/binders', asyncRoute(async (req, res) => {
+  const user = jsonLoader(USERS_PATH).find((u) => u.id === req.params.userId);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-  const binders = tradableBinders(loadJson(BINDERS_PATH), user.id);
+  const binders = tradableBinders(await binderRepository.listByUser(user.id), user.id);
 
   res.json({ user: publicUser(user), binders });
-});
+}));
 
 /**
  * POST /api/trade/compare
  * body: { targetUserId, binderId, wishlistId }
  * Coincide por nombre de carta (ignora set/edición).
  */
-router.post('/compare', (req, res) => {
+router.post('/compare', asyncRoute(async (req, res) => {
   const { targetUserId, binderId, wishlistId } = req.body || {};
   if (!targetUserId || !binderId || !wishlistId) {
     return res.status(400).json({ error: 'Faltan targetUserId, binderId o wishlistId' });
   }
 
-  const targetUser = loadJson(USERS_PATH).find((u) => u.id === targetUserId);
+  const targetUser = jsonLoader(USERS_PATH).find((u) => u.id === targetUserId);
   if (!targetUser) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-  const binder = loadJson(BINDERS_PATH).find(
-    (b) => b.id === binderId && b.userId === targetUserId && b.tradeEnabled === true,
-  );
-  if (!binder) return res.status(404).json({ error: 'Binder no encontrado' });
+  const binder = await binderRepository.findById(binderId);
+  if (!binder || binder.userId !== targetUserId || binder.tradeEnabled !== true) {
+    return res.status(404).json({ error: 'Binder no encontrado' });
+  }
 
-  const wishlist = loadJson(WISHLISTS_PATH).find(
+  const wishlist = jsonLoader(WISHLISTS_PATH).find(
     (w) => w.id === wishlistId && w.userId === req.user.id,
   );
   if (!wishlist) return res.status(404).json({ error: 'Wishlist no encontrada' });
@@ -137,7 +143,11 @@ router.post('/compare', (req, res) => {
     matchCount: matches.length,
     matches,
   });
-});
+}));
 
-module.exports = router;
+  return router;
+}
+
+module.exports = createTradeRouter();
+module.exports.createTradeRouter = createTradeRouter;
 module.exports.tradableBinders = tradableBinders;

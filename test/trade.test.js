@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { createTradeRouter, tradableBinders } = require('../routes/trade');
 
-async function withTradeServer(fixtures, test, binderRepository = {}) {
+async function withTradeServer(fixtures, test, binderRepository = {}, wishlistRepository = {}) {
   const jsonLoader = (file) => {
     const name = ['users', 'binders', 'wishlists'].find((item) => String(file).endsWith(`${item}.json`));
     return fixtures[name] || [];
@@ -13,11 +13,19 @@ async function withTradeServer(fixtures, test, binderRepository = {}) {
     findById: async (id) => (fixtures.binders || []).find((binder) => binder.id === id) || null,
     ...binderRepository,
   };
+  const configuredWishlistRepository = {
+    findById: async (id) => (fixtures.wishlists || []).find((wishlist) => wishlist.id === id) || null,
+    ...wishlistRepository,
+  };
 
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => { req.user = { id: 'u1' }; next(); });
-  app.use('/api/trade', createTradeRouter({ binderRepository: repository, jsonLoader }));
+  app.use('/api/trade', createTradeRouter({
+    binderRepository: repository,
+    wishlistRepository: configuredWishlistRepository,
+    jsonLoader,
+  }));
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   try { await test(`http://127.0.0.1:${server.address().port}`); }
@@ -84,6 +92,47 @@ describe('trade name match', () => {
       },
     });
     assert.equal(requestedUserId, 'u2');
+  });
+
+  it('loads the authenticated wishlist through the configured repository', async () => {
+    let requestedWishlistId;
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [{ id: 'public', userId: 'u2', name: 'Trades', tradeEnabled: true, cards: [] }],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/compare`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ targetUserId: 'u2', binderId: 'public', wishlistId: 'wanted' }),
+      });
+
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.wishlist.id, 'wanted');
+      assert.equal(body.matchCount, 0);
+    }, {}, {
+      findById: async (id) => {
+        requestedWishlistId = id;
+        return { id: 'wanted', userId: 'u1', name: 'Wanted', description: '', cards: [] };
+      },
+    });
+    assert.equal(requestedWishlistId, 'wanted');
+  });
+
+  it('rejects a repository wishlist owned by another player', async () => {
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [{ id: 'public', userId: 'u2', name: 'Trades', tradeEnabled: true, cards: [] }],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/compare`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ targetUserId: 'u2', binderId: 'public', wishlistId: 'other' }),
+      });
+
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), { error: 'Wishlist no encontrada' });
+    }, {}, {
+      findById: async () => ({ id: 'other', userId: 'u3', name: 'Private', cards: [] }),
+    });
   });
 
   it('rejects direct comparison against a private binder id', async () => {

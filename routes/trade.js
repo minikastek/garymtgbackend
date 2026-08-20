@@ -2,9 +2,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { createBinderRepository } = require('../src/repositories/binder');
+const { createWishlistRepository } = require('../src/repositories/wishlist');
 
 const USERS_PATH = path.join(__dirname, '..', 'users.json');
-const WISHLISTS_PATH = path.join(__dirname, '..', 'wishlists.json');
 
 function asyncRoute(handler) { return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next); }
 
@@ -43,6 +43,7 @@ function tradableBinders(binders, userId) {
 function createTradeRouter(options = {}) {
   const router = express.Router();
   const binderRepository = options.binderRepository || createBinderRepository();
+  const wishlistRepository = options.wishlistRepository || createWishlistRepository();
   const jsonLoader = options.jsonLoader || loadJson;
 
 /** GET /api/trade/users?q=ali */
@@ -88,10 +89,10 @@ router.post('/compare', asyncRoute(async (req, res) => {
     return res.status(404).json({ error: 'Binder no encontrado' });
   }
 
-  const wishlist = jsonLoader(WISHLISTS_PATH).find(
-    (w) => w.id === wishlistId && w.userId === req.user.id,
-  );
-  if (!wishlist) return res.status(404).json({ error: 'Wishlist no encontrada' });
+  const wishlist = await wishlistRepository.findById(wishlistId);
+  if (!wishlist || wishlist.userId !== req.user.id) {
+    return res.status(404).json({ error: 'Wishlist no encontrada' });
+  }
 
   // wishlist: key → { name, quantity, printings }
   const wanted = new Map();

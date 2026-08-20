@@ -33,4 +33,27 @@ describe('binder router', () => {
       assert.deepEqual(await response.json(), { error: 'No es tu binder' });
     });
   });
+
+  it('requires a boolean trade opt-in and persists owner changes', async () => {
+    let changes;
+    const repository = {
+      findById: async () => ({ id: 'b1', userId: 'u1', tradeEnabled: false }),
+      update: async (id, value) => { changes = value; return { id, userId: 'u1', ...value }; },
+    };
+    await withServer(repository, async (baseUrl) => {
+      const invalid = await fetch(`${baseUrl}/api/binders/b1`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tradeEnabled: 'yes' }),
+      });
+      assert.equal(invalid.status, 400);
+
+      const response = await fetch(`${baseUrl}/api/binders/b1`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tradeEnabled: true }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(changes, { tradeEnabled: true });
+      assert.equal((await response.json()).binder.tradeEnabled, true);
+    });
+  });
 });

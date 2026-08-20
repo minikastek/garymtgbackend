@@ -26,10 +26,10 @@ class JsonBinderRepository {
   listByUser(userId) { return this.load().filter((item) => item.userId === userId); }
   findById(id) { return this.load().find((item) => item.id === id) || null; }
 
-  create({ userId, name, description }) {
+  create({ userId, name, description, tradeEnabled = false }) {
     const values = this.load();
     const now = this.now().toISOString();
-    const binder = normalizeBinder({ id: this.idFactory(), userId, name, description, cards: [], createdAt: now, updatedAt: now });
+    const binder = normalizeBinder({ id: this.idFactory(), userId, name, description, tradeEnabled, cards: [], createdAt: now, updatedAt: now });
     values.push(binder);
     this.save(values);
     return binder;
@@ -41,6 +41,7 @@ class JsonBinderRepository {
     if (!binder) return null;
     if (changes.name !== undefined) binder.name = changes.name;
     if (changes.description !== undefined) binder.description = changes.description;
+    if (changes.tradeEnabled !== undefined) binder.tradeEnabled = changes.tradeEnabled;
     if (changes.cards !== undefined) binder.cards = changes.cards.map((card) => normalizeCard(card));
     binder.updatedAt = this.now().toISOString();
     this.save(values);

@@ -11,7 +11,8 @@ function mapCard(row) {
 
 function mapBinder(row, cards = []) {
   return normalizeBinder({
-    id: row.id, userId: row.user_id, name: row.name, description: row.description, cards,
+    id: row.id, userId: row.user_id, name: row.name, description: row.description,
+    tradeEnabled: row.trade_enabled === true, cards,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   });
@@ -33,23 +34,23 @@ class PostgresBinderRepository {
 
   async listByUser(userId) {
     const result = await this.pool.query(
-      "SELECT id, user_id, name, description, created_at, updated_at FROM collections WHERE user_id = $1 AND type = 'binder' ORDER BY created_at DESC", [userId]);
+      "SELECT id, user_id, name, description, trade_enabled, created_at, updated_at FROM collections WHERE user_id = $1 AND type = 'binder' ORDER BY created_at DESC", [userId]);
     const cards = await this.cardsFor(result.rows.map((row) => row.id));
     return result.rows.map((row) => mapBinder(row, cards.get(row.id)));
   }
 
   async findById(id, client = this.pool) {
     const result = await client.query(
-      "SELECT id, user_id, name, description, created_at, updated_at FROM collections WHERE id = $1 AND type = 'binder'", [id]);
+      "SELECT id, user_id, name, description, trade_enabled, created_at, updated_at FROM collections WHERE id = $1 AND type = 'binder'", [id]);
     if (!result.rows[0]) return null;
     const cards = await this.cardsFor([id], client);
     return mapBinder(result.rows[0], cards.get(id));
   }
 
-  async create({ userId, name, description }) {
+  async create({ userId, name, description, tradeEnabled = false }) {
     const result = await this.pool.query(
-      "INSERT INTO collections (id, user_id, type, name, description) VALUES ($1, $2, 'binder', $3, $4) RETURNING id, user_id, name, description, created_at, updated_at",
-      [this.idFactory(), userId, name, description]);
+      "INSERT INTO collections (id, user_id, type, name, description, trade_enabled) VALUES ($1, $2, 'binder', $3, $4, $5) RETURNING id, user_id, name, description, trade_enabled, created_at, updated_at",
+      [this.idFactory(), userId, name, description, tradeEnabled]);
     return mapBinder(result.rows[0]);
   }
 
@@ -58,6 +59,7 @@ class PostgresBinderRepository {
     const values = [];
     if (changes.name !== undefined) { values.push(changes.name); assignments.push(`name = $${values.length}`); }
     if (changes.description !== undefined) { values.push(changes.description); assignments.push(`description = $${values.length}`); }
+    if (changes.tradeEnabled !== undefined) { values.push(changes.tradeEnabled); assignments.push(`trade_enabled = $${values.length}`); }
     if (assignments.length) {
       values.push(id);
       await this.pool.query(`UPDATE collections SET ${assignments.join(', ')}, updated_at = now() WHERE id = $${values.length} AND type = 'binder'`, values);

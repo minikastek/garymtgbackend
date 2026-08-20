@@ -17,7 +17,15 @@ function createBinderRouter(repository = createBinderRepository()) {
   router.post('/', asyncRoute(async (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'Nombre requerido' });
-    const binder = await repository.create({ userId: req.user.id, name, description: String(req.body?.description || '').trim().slice(0, 280) });
+    if (req.body?.tradeEnabled !== undefined && typeof req.body.tradeEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'tradeEnabled debe ser booleano' });
+    }
+    const binder = await repository.create({
+      userId: req.user.id,
+      name,
+      description: String(req.body?.description || '').trim().slice(0, 280),
+      tradeEnabled: req.body?.tradeEnabled === true,
+    });
     return res.status(201).json({ binder });
   }));
   router.get('/:id', asyncRoute(async (req, res) => { const binder = await owned(req, res); if (binder) res.json({ binder }); }));
@@ -30,6 +38,12 @@ function createBinderRouter(repository = createBinderRepository()) {
       changes.name = name;
     }
     if (req.body?.description !== undefined) changes.description = String(req.body.description).trim().slice(0, 280);
+    if (req.body?.tradeEnabled !== undefined) {
+      if (typeof req.body.tradeEnabled !== 'boolean') {
+        return res.status(400).json({ error: 'tradeEnabled debe ser booleano' });
+      }
+      changes.tradeEnabled = req.body.tradeEnabled;
+    }
     if (Array.isArray(req.body?.cards)) changes.cards = req.body.cards.map((card) => normalizeCard(card));
     return res.json({ binder: await repository.update(req.params.id, changes) });
   }));

@@ -26,7 +26,17 @@ function mapTrade(row, items = []) {
 }
 
 function mapItem(row) {
-  return { binderId: row.binder_id, cardId: row.card_id, quantity: row.quantity };
+  return {
+    binderId: row.binder_id,
+    cardId: row.card_id,
+    name: row.name || null,
+    set: row.set_code || null,
+    collectorNumber: row.collector_number || null,
+    quantity: row.quantity,
+    unitValue: row.unit_value == null ? null : Number(row.unit_value),
+    priceSource: row.price_source || null,
+    priceObservedAt: iso(row.price_observed_at) || null,
+  };
 }
 
 const TRADE_COLUMNS = `id, proposer_user_id, recipient_user_id, parent_trade_id, status,
@@ -39,7 +49,8 @@ class PostgresTradeRepository {
   async itemsFor(ids, client = this.pool) {
     if (!ids.length) return new Map();
     const result = await client.query(
-      `SELECT proposal_id, binder_id, card_id, quantity, side, position
+      `SELECT proposal_id, binder_id, card_id, name, set_code, collector_number,
+              quantity, unit_value, price_source, price_observed_at, side, position
        FROM trade_proposal_items
        WHERE proposal_id = ANY($1::text[])
        ORDER BY proposal_id, side, position, id`, [ids]);
@@ -128,9 +139,14 @@ class PostgresTradeRepository {
       for (const [position, item] of items.entries()) {
         await client.query(
           `INSERT INTO trade_proposal_items
-            (proposal_id, owner_user_id, binder_id, card_id, quantity, side, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [trade.id, ownerId, item.binderId, item.cardId, item.quantity, side, position]);
+            (proposal_id, owner_user_id, binder_id, card_id, name, set_code,
+             collector_number, quantity, unit_value, price_source, price_observed_at,
+             side, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+          [trade.id, ownerId, item.binderId, item.cardId, item.name || null,
+            item.set || null, item.collectorNumber || null, item.quantity,
+            item.unitValue ?? null, item.priceSource || null, item.priceObservedAt || null,
+            side, position]);
       }
     }
   }

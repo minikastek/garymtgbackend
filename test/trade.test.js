@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const express = require('express');
 const { createTradeRouter, tradableBinders } = require('../routes/trade');
 
-async function withTradeServer(fixtures, test, binderRepository = {}, wishlistRepository = {}) {
+async function withTradeServer(fixtures, test, binderRepository = {}, wishlistRepository = {}, tradeOptions = {}) {
   const jsonLoader = (file) => {
     const name = ['users', 'binders', 'wishlists'].find((item) => String(file).endsWith(`${item}.json`));
     return fixtures[name] || [];
@@ -25,6 +25,7 @@ async function withTradeServer(fixtures, test, binderRepository = {}, wishlistRe
     binderRepository: repository,
     wishlistRepository: configuredWishlistRepository,
     jsonLoader,
+    ...tradeOptions,
   }));
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
@@ -154,6 +155,174 @@ describe('trade name match', () => {
 
       assert.equal(response.status, 404);
       assert.deepEqual(await response.json(), { error: 'Binder no encontrado' });
+    });
+  });
+
+  it('creates a pending proposal from server-owned cards and authoritative prices', async () => {
+    let persisted;
+    const observedAt = '2026-09-01T02:30:00.000Z';
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [
+        {
+          id: 'mine', userId: 'u1', name: 'My trades', cards: [{
+            id: 'ring', name: 'Sol Ring', set: 'C21', collectorNumber: '263', quantity: 2,
+            prices: { scryfallUsd: 1.5 },
+          }],
+        },
+        {
+          id: 'theirs', userId: 'u2', name: 'Bob trades', tradeEnabled: true, cards: [{
+            id: 'lotus', name: 'Lotus Petal', set: 'TMP', collectorNumber: '294', quantity: 1,
+            prices: { scryfallUsd: 12 },
+          }],
+        },
+      ],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/proposals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: 'u2',
+          offeredItems: [{ binderId: 'mine', cardId: 'ring', quantity: 1, unitValue: 999 }],
+          requestedItems: [{ binderId: 'theirs', cardId: 'lotus', quantity: 1 }],
+        }),
+      });
+
+      assert.equal(response.status, 201);
+      const body = await response.json();
+      assert.equal(body.trade.status, 'pending');
+      assert.equal(body.trade.offeredItems[0].unitValue, 2.5);
+      assert.equal(body.trade.requestedItems[0].unitValue, 12);
+    }, {}, {}, {
+      tradeRepository: { create: async (trade) => { persisted = trade; return trade; } },
+      priceResolver: async (card) => card.id === 'ring'
+        ? { unitValue: 2.5, priceSource: 'cardkingdom' }
+        : { unitValue: 12, priceSource: 'scryfall' },
+      now: () => new Date(observedAt),
+    });
+
+    assert.equal(persisted.proposerUserId, 'u1');
+    assert.equal(persisted.recipientUserId, 'u2');
+    assert.deepEqual(persisted.offeredItems[0], {
+      binderId: 'mine', cardId: 'ring', name: 'Sol Ring', set: 'C21',
+      collectorNumber: '263', quantity: 1, unitValue: 2.5,
+      priceSource: 'cardkingdom', priceObservedAt: observedAt,
+    });
+  });
+
+  it('rejects proposal quantities beyond the server-owned binder balance', async () => {
+    let createCalls = 0;
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [
+        { id: 'mine', userId: 'u1', cards: [{ id: 'ring', name: 'Sol Ring', quantity: 1 }] },
+        {
+          id: 'theirs', userId: 'u2', tradeEnabled: true,
+          cards: [{ id: 'lotus', name: 'Lotus Petal', quantity: 1 }],
+        },
+      ],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/proposals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: 'u2',
+          offeredItems: [{ binderId: 'mine', cardId: 'ring', quantity: 2 }],
+          requestedItems: [{ binderId: 'theirs', cardId: 'lotus', quantity: 1 }],
+        }),
+      });
+
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), { error: 'Cantidad de cartas no disponible' });
+    }, {}, {}, {
+      tradeRepository: { create: async () => { createCalls += 1; } },
+      priceResolver: async () => ({ unitValue: null, priceSource: null }),
+    });
+    assert.equal(createCalls, 0);
+  });
+
+  it('rejects duplicate item rows that cumulatively exceed the binder balance', async () => {
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [
+        { id: 'mine', userId: 'u1', cards: [{ id: 'ring', name: 'Sol Ring', quantity: 1 }] },
+        {
+          id: 'theirs', userId: 'u2', tradeEnabled: true,
+          cards: [{ id: 'lotus', name: 'Lotus Petal', quantity: 1 }],
+        },
+      ],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/proposals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: 'u2',
+          offeredItems: [
+            { binderId: 'mine', cardId: 'ring', quantity: 1 },
+            { binderId: 'mine', cardId: 'ring', quantity: 1 },
+          ],
+          requestedItems: [{ binderId: 'theirs', cardId: 'lotus', quantity: 1 }],
+        }),
+      });
+
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), { error: 'Cantidad de cartas no disponible' });
+    }, {}, {}, {
+      tradeRepository: { create: async () => assert.fail('proposal must not persist') },
+      priceResolver: async () => ({ unitValue: null, priceSource: null }),
+    });
+  });
+
+  it('rejects requested cards from a binder that is not public for trade', async () => {
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [
+        { id: 'mine', userId: 'u1', cards: [{ id: 'ring', name: 'Sol Ring', quantity: 1 }] },
+        {
+          id: 'private', userId: 'u2', tradeEnabled: false,
+          cards: [{ id: 'lotus', name: 'Lotus Petal', quantity: 1 }],
+        },
+      ],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/proposals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: 'u2',
+          offeredItems: [{ binderId: 'mine', cardId: 'ring', quantity: 1 }],
+          requestedItems: [{ binderId: 'private', cardId: 'lotus', quantity: 1 }],
+        }),
+      });
+
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), { error: 'Cartas de intercambio no disponibles' });
+    }, {}, {}, {
+      tradeRepository: { create: async () => assert.fail('proposal must not persist') },
+      priceResolver: async () => ({ unitValue: null, priceSource: null }),
+    });
+  });
+
+  it('returns a safe JSON error when proposal persistence fails', async () => {
+    await withTradeServer({
+      users: [{ id: 'u1', username: 'Alice' }, { id: 'u2', username: 'Bob' }],
+      binders: [
+        { id: 'mine', userId: 'u1', cards: [{ id: 'ring', name: 'Sol Ring', quantity: 1 }] },
+        {
+          id: 'theirs', userId: 'u2', tradeEnabled: true,
+          cards: [{ id: 'lotus', name: 'Lotus Petal', quantity: 1 }],
+        },
+      ],
+    }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/trade/proposals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          recipientUserId: 'u2',
+          offeredItems: [{ binderId: 'mine', cardId: 'ring', quantity: 1 }],
+          requestedItems: [{ binderId: 'theirs', cardId: 'lotus', quantity: 1 }],
+        }),
+      });
+
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), { error: 'No se pudo crear la propuesta' });
+    }, {}, {}, {
+      tradeRepository: { create: async () => { throw new Error('database details'); } },
+      priceResolver: async () => ({ unitValue: null, priceSource: null }),
     });
   });
 });

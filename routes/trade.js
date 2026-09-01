@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { createBinderRepository } = require('../src/repositories/binder');
 const { createWishlistRepository } = require('../src/repositories/wishlist');
+const { createTradeRepository } = require('../src/repositories/trade');
+const { createTrade } = require('../src/repositories/trade/model');
+const cardkingdom = require('../src/services/cardkingdom.service');
 
 const USERS_PATH = path.join(__dirname, '..', 'users.json');
 
@@ -40,11 +43,78 @@ function tradableBinders(binders, userId) {
     }));
 }
 
+function parseProposalItems(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const parsed = items.map((item) => ({
+    binderId: String(item?.binderId || '').trim(),
+    cardId: String(item?.cardId || '').trim(),
+    quantity: Number(item?.quantity),
+  }));
+  return parsed.every((item) => item.binderId && item.cardId
+    && Number.isInteger(item.quantity) && item.quantity > 0) ? parsed : null;
+}
+
+async function currentPrice(card) {
+  const ck = await cardkingdom.findPrice({
+    scryfallId: card.id,
+    name: card.name,
+    set: card.set,
+  });
+  if (Number.isFinite(ck?.price) && ck.price >= 0) {
+    return { unitValue: ck.price, priceSource: 'cardkingdom' };
+  }
+  const scryfall = Number(card.prices?.scryfallUsd);
+  return Number.isFinite(scryfall) && scryfall >= 0
+    ? { unitValue: scryfall, priceSource: 'scryfall' }
+    : { unitValue: null, priceSource: null };
+}
+
 function createTradeRouter(options = {}) {
   const router = express.Router();
   const binderRepository = options.binderRepository || createBinderRepository();
   const wishlistRepository = options.wishlistRepository || createWishlistRepository();
+  const tradeRepository = options.tradeRepository || createTradeRepository();
+  const priceResolver = options.priceResolver || currentPrice;
+  const now = options.now || (() => new Date());
   const jsonLoader = options.jsonLoader || loadJson;
+
+  async function snapshotItems(items, ownerId, requiresPublicBinder, observedAt) {
+    const snapshots = [];
+    const binders = new Map();
+    const selectedQuantities = new Map();
+    for (const item of items) {
+      if (!binders.has(item.binderId)) {
+        binders.set(item.binderId, await binderRepository.findById(item.binderId));
+      }
+      const binder = binders.get(item.binderId);
+      if (!binder || binder.userId !== ownerId
+          || (requiresPublicBinder && binder.tradeEnabled !== true)) {
+        return { status: 404, error: 'Cartas de intercambio no disponibles' };
+      }
+      const card = (binder.cards || []).find((candidate) => String(candidate.id) === item.cardId);
+      if (!card) return { status: 404, error: 'Cartas de intercambio no disponibles' };
+      const selectionKey = `${item.binderId}:${item.cardId}`;
+      const selectedQuantity = (selectedQuantities.get(selectionKey) || 0) + item.quantity;
+      if (selectedQuantity > Number(card.quantity || 0)) {
+        return { status: 409, error: 'Cantidad de cartas no disponible' };
+      }
+      selectedQuantities.set(selectionKey, selectedQuantity);
+      const price = await priceResolver(card);
+      const unitValue = Number(price?.unitValue);
+      snapshots.push({
+        binderId: item.binderId,
+        cardId: item.cardId,
+        name: card.name,
+        set: card.set || null,
+        collectorNumber: card.collectorNumber || null,
+        quantity: item.quantity,
+        unitValue: Number.isFinite(unitValue) && unitValue >= 0 ? unitValue : null,
+        priceSource: price?.priceSource || null,
+        priceObservedAt: observedAt,
+      });
+    }
+    return { snapshots };
+  }
 
 /** GET /api/trade/users?q=ali */
 router.get('/users', (req, res) => {
@@ -145,6 +215,39 @@ router.post('/compare', asyncRoute(async (req, res) => {
     matches,
   });
 }));
+
+/** POST /api/trade/proposals */
+router.post('/proposals', asyncRoute(async (req, res) => {
+  const recipientUserId = String(req.body?.recipientUserId || '').trim();
+  const offeredItems = parseProposalItems(req.body?.offeredItems);
+  const requestedItems = parseProposalItems(req.body?.requestedItems);
+  if (!recipientUserId || !offeredItems || !requestedItems || recipientUserId === req.user.id) {
+    return res.status(400).json({ error: 'Propuesta de intercambio invalida' });
+  }
+
+  const recipient = jsonLoader(USERS_PATH).find((user) => user.id === recipientUserId);
+  if (!recipient) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  const observedAt = now().toISOString();
+  const offered = await snapshotItems(offeredItems, req.user.id, false, observedAt);
+  if (offered.error) return res.status(offered.status).json({ error: offered.error });
+  const requested = await snapshotItems(requestedItems, recipientUserId, true, observedAt);
+  if (requested.error) return res.status(requested.status).json({ error: requested.error });
+
+  const trade = createTrade({
+    proposerUserId: req.user.id,
+    recipientUserId,
+    offeredItems: offered.snapshots,
+    requestedItems: requested.snapshots,
+  }, { now });
+  return res.status(201).json({ trade: await tradeRepository.create(trade) });
+}));
+
+router.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  console.error('Trade proposal error:', error.message);
+  return res.status(500).json({ error: 'No se pudo crear la propuesta' });
+});
 
   return router;
 }
